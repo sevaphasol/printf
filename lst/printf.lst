@@ -1,0 +1,72 @@
+     1                                  ; ----------------------------------------------------------------------------------------
+     2                                  ; Writes "Hola, mundo" to the console using a C library. Runs on Linux.
+     3                                  ;
+     4                                  ;     nasm -felf64 hola.asm && gcc hola.o && ./a.out
+     5                                  ; ----------------------------------------------------------------------------------------
+     6                                  
+     7                                  section .note.GNU-stack noalloc noexec nowrite progbits
+     8                                  
+     9                                  section .text
+    10                                  global _start
+    11                                  
+    12                                  ; ----------------------------------------------------------------------------------------
+    13                                  
+    14                                  _start:
+    15                                      ; ———————— Testing my_printf ————————
+    16                                      ; Preparing arguments to call my_printf
+    17 00000000 68[00000000]                push format
+    18                                  
+    19 00000005 E80A000000                  call my_printf
+    20                                  
+    21                                      ; ———————— Exit the programm ————————
+    22 0000000A B83C000000                  mov rax, 0x3c ; syscall: exit
+    23 0000000F 4831FF                      xor rdi, rdi  ; exit code = 0
+    24 00000012 0F05                        syscall
+    25                                  
+    26                                  ; ----------------------------------------------------------------------------------------
+    27                                  ; Analog of function printf from libC
+    28                                  ;
+    29                                  ; Args:     rdi = const char* format
+    30                                  ; ----------------------------------------------------------------------------------------
+    31                                  my_printf:
+    32 00000014 55                          push rbp
+    33 00000015 4889E5                      mov rbp, rsp
+    34                                  
+    35 00000018 48BF-                       mov rdi, format
+    35 0000001A [0000000000000000] 
+    36 00000022 BE0A000000                  mov rsi, 10
+    37 00000027 E802000000                  call buf_dump
+    38                                  
+    39 0000002C 5D                          pop rbp
+    40 0000002D C3                          ret
+    41                                  
+    42                                  
+    43                                  ; ----------------------------------------------------------------------------------------
+    44                                  ; Writes buffer in std output
+    45                                  ;
+    46                                  ; Args:     rdi = const char* buffer
+    47                                  ;           rsi = size_t      n_chars
+    48                                  ; ----------------------------------------------------------------------------------------
+    49                                  buf_dump:
+    50 0000002E 55                          push rbp
+    51 0000002F 4889E5                      mov rbp, rsp
+    52                                  
+    53                                      ; ———————— Save args on stack ————————
+    54 00000032 48897DF8                    mov [rbp - 8],  rdi
+    55 00000036 488975F0                    mov [rbp - 16], rsi
+    56                                  
+    57                                      ; ———————— Prepare to syscall write ————————
+    58 0000003A B801000000                  mov rax, 0x01       ; syscall: write(unsigned int fd, const char *buf, size_t count)
+    59 0000003F BF01000000                  mov rdi, 1          ; stdout
+    60 00000044 488B75F8                    mov rsi, [rbp - 8]  ; buffer
+    61 00000048 488B55F0                    mov rdx, [rbp - 16] ; n_chars
+    62 0000004C 0F05                        syscall
+    63                                      ; ——————————————————————————————————————————
+    64                                  
+    65 0000004E 5D                          pop rbp
+    66 0000004F C3                          ret
+    67                                  
+    68                                  section .data
+    69 00000000 466972737420697465-     format db "First iteration, no %"
+    69 00000009 726174696F6E2C206E-
+    69 00000012 6F2025             
