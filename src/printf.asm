@@ -3,13 +3,12 @@
 ; ----------------------------------------------------------------------------------------
 
 section .data
-NUM_BUFFER      db 64 dup(0)      ; buffer for ASCII codes of printing number's digits
+NUM_BUFFER      db 64 dup(0)          ; buffer for ASCII codes of printing number's digits
 NUM_BUFFER_SIZE equ $ - NUM_BUFFER
-FORMAT          db "one = %d", 0xa, 0
-TEST_STR        db "this is a test string", 0
+CONVERT_ARRAY   db "0123456789abcdef" ; array for converting numbers to ASCII
 JUMP_TABLE:
             dq handle_invalid ; a
-            dq handle_invalid ; b
+            dq handle_binary  ; b
             dq handle_char    ; c
             dq handle_decimal ; d
             dq handle_invalid ; e
@@ -22,7 +21,7 @@ JUMP_TABLE:
             dq handle_invalid ; l
             dq handle_invalid ; m
             dq handle_invalid ; n
-            dq handle_invalid ; o
+            dq handle_octal   ; o
             dq handle_invalid ; p
             dq handle_invalid ; q
             dq handle_invalid ; r
@@ -31,26 +30,47 @@ JUMP_TABLE:
             dq handle_invalid ; u
             dq handle_invalid ; v
             dq handle_invalid ; w
-            dq handle_invalid ; x
+            dq handle_hex     ; x
             dq handle_invalid ; y
             dq handle_invalid ; z
 
 section .text
-global _start
+global my_printf
 
 ; ----------------------------------------------------------------------------------------
+; Wrapper for analog of libC's function printf (System V AMD64 ABI)
+;
+; Entry: rdi   = format
+;        rsi   = 1st argument
+;        rdx   = 2nd argument
+;        rcx   = 3d  argument
+;        r8    = 4th argument
+;        r9    = 5th argument
+;        stack = |6th arg| —> |7th arg| —> ...
+;
+; Exit:  rax = amount of format elements
+;
+; Destr: r10
+; ----------------------------------------------------------------------------------------
+my_printf:
+    pop r10
 
-_start:
-; Preparing arguments to call printf
-    mov rdi, FORMAT
-    push -123
-    call printf
+    push r9
+    push r8
+    push rcx
+    push rdx
+    push rsi
 
-; rax = syscall code of "exit"
-    mov rax, 0x3c
-; exit code = 0
-    xor rdi, rdi
-    syscall
+    call stack_printf
+
+    pop rsi
+    pop rdx
+    pop rcx
+    pop r8
+    pop r9
+
+    push r10
+    ret
 
 ; ----------------------------------------------------------------------------------------
 ; Analog of libC's function printf
@@ -62,12 +82,12 @@ _start:
 ;
 ; Destr:
 ; ----------------------------------------------------------------------------------------
-printf:
+stack_printf:
 ; We will use rbp for addressing to additional parameters.
     push rbp
     mov rbp, rsp
 
-; In stack we have: | rbp | —> | return address | —> | 1st arg |.
+; In stack we have: |rbp| —> |return address| —> |1st arg|.
 ; So to appeal with additional arguments we must do rbp += 16.
     add rbp, 16
 
@@ -228,23 +248,86 @@ handle_string:
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
-; Handle %d specifier.
+; Handle %d specifier
 ; NOT FOR CALL. NO RET HERE. ONLY JUMP.
 ;
 ; Entry: rbp = &decimal_to_print
+;
+; Exit: None
+;
+; Destr:
+; ----------------------------------------------------------------------------------------
+handle_decimal:
+; rsi = base of the number
+    mov rsi, 10
+    call number_to_ascii
+    jmp routine_after_handling_specifier
+
+; ----------------------------------------------------------------------------------------
+; Handle %b specifier
+; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+;
+; Entry: rbp = &decimal_to_print
+;
+; Exit: None
+;
+; Destr:
+; ----------------------------------------------------------------------------------------
+handle_binary:
+; rsi = base of the number
+    mov rsi, 2
+    call number_to_ascii
+    jmp routine_after_handling_specifier
+
+; ----------------------------------------------------------------------------------------
+; Handle %o specifier
+; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+;
+; Entry: rbp = &decimal_to_print
+;
+; Exit: None
+;
+; Destr:
+; ----------------------------------------------------------------------------------------
+handle_octal:
+; rsi = base of the number
+    mov rsi, 8
+    call number_to_ascii
+    jmp routine_after_handling_specifier
+
+; ----------------------------------------------------------------------------------------
+; Handle %x specifier
+; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+;
+; Entry: rbp = &decimal_to_print
+;
+; Exit: None
+;
+; Destr:
+; ----------------------------------------------------------------------------------------
+handle_hex:
+; rsi = base of the number
+    mov rsi, 16
+    call number_to_ascii
+    jmp routine_after_handling_specifier
+
+; ----------------------------------------------------------------------------------------
+; Print number in specific base.
+;
+; Entry: rbp = &number_to_print
+;        rsi = base
 ;
 ; Exit:  None
 ;
 ; Destr: rax, rdi, rcx, rsi, rdx
 ; ----------------------------------------------------------------------------------------
-handle_decimal:
+number_to_ascii:
 ; Save registers.
     push rax ; Use it for dividing and syscall.
     push rbx ; Use it for addressing to number buffer.
     push rcx ; Use it for counting digits in number.
     push rdx ; Use it for dividing and syscall.
     push rdi ; Use it for syscall.
-    push rsi ; Use it for syscall.
 
 ; rax = decimal_to_print
     mov rax, [rbp]
@@ -265,9 +348,6 @@ handle_decimal:
 ; rbx - end of the buffer
     mov rbx, NUM_BUFFER + NUM_BUFFER_SIZE - 1
 
-; rsi - base of number
-    mov rsi, 10
-
 ; rcx - counter of digits
     xor rcx, rcx
 
@@ -278,7 +358,7 @@ handle_decimal:
     xor rdx, rdx
     div rsi
 ; Put ASCII CODE of dl into the buffer
-    add dl, '0'
+    mov dl, [CONVERT_ARRAY + rdx]
     mov [rbx], dl
 ; rbx-- — going to the next cell of buffer (right to left)
     dec rbx
@@ -298,10 +378,9 @@ handle_decimal:
 
     syscall
 
-    pop rsi
     pop rdi
     pop rdx
     pop rcx
     pop rbx
     pop rax
-    jmp routine_after_handling_specifier
+    ret
