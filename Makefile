@@ -3,11 +3,11 @@
 ASSEMBLER         = nasm
 ASM_FLAGS         = -f elf64
 
-COMPILER		  = gcc
-COMPILER_FLAGS	  = -c
+COMPILER          = gcc
+COMPILER_FLAGS    = -c
 
 LINKER            = gcc
-LD_FLAGS          = -no-pie -z noexecstack
+LD_FLAGS          = -no-pie -z noexecstack -nostdlib
 
 # ---------------------------------------------------------------------------------------- #
 

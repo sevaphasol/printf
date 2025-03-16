@@ -1,11 +1,14 @@
 ; ----------------------------------------------------------------------------------------
-; Implementation of custom printf. Runs on Linux.
+; Implementation of printf from libC. Runs on Linux.
+; Supported specifiers: %%, %c, %s, %d, %x, %o, %b.
 ; ----------------------------------------------------------------------------------------
 
 section .data
-NUM_BUFFER      db 64 dup(0)          ; buffer for ASCII codes of printing number's digits
+NUM_BUFFER      db  64 dup(0)          ; buffer for ASCII codes of printing number's digits
 NUM_BUFFER_SIZE equ $ - NUM_BUFFER
-CONVERT_ARRAY   db "0123456789abcdef" ; array for converting numbers to ASCII
+
+CONVERT_ARRAY   db  "0123456789abcdef" ; array for converting numbers to ASCII
+
 JUMP_TABLE:
             dq handle_invalid ; a
             dq handle_binary  ; b
@@ -46,31 +49,32 @@ global my_printf
 ;        rcx   = 3d  argument
 ;        r8    = 4th argument
 ;        r9    = 5th argument
-;        stack = |6th arg| —> |7th arg| —> ...
+;        stack = rsp —> |6th arg|—|7th arg|— ...
 ;
 ; Exit:  rax = amount of format elements
 ;
-; Destr: r10
+; Destr: r10, rdi, rcx
 ; ----------------------------------------------------------------------------------------
 my_printf:
+; In stack we have: rsp —> |return address|— ...
+; We want make it:  rsp —> |1th arg|—|2nd arg|— ... —|last arg|—|return address|
     pop r10
-
+; Pushing 1st to 5th arguments. 6th+ arguments are already in stack.
     push r9
     push r8
     push rcx
     push rdx
     push rsi
+; If there is less than 5 arguments, it won't be crucial if we push extra registers.
 
     call stack_printf
 
-    pop rsi
-    pop rdx
-    pop rcx
-    pop r8
-    pop r9
+; We must balance the stack.
+; We pushed 5 registers — each 8 bytes, so it will be 40 bytes.
+    add rsp, 48
 
-    push r10
-    ret
+; We don't have return address in stack, so we can do push r10, than ret. Or just
+    jmp r10
 
 ; ----------------------------------------------------------------------------------------
 ; Analog of libC's function printf
@@ -80,14 +84,14 @@ my_printf:
 ;
 ; Exit:  rax = amount of format elements
 ;
-; Destr:
+; Destr: rdi, rcx
 ; ----------------------------------------------------------------------------------------
 stack_printf:
 ; We will use rbp for addressing to additional parameters.
     push rbp
     mov rbp, rsp
 
-; In stack we have: |rbp| —> |return address| —> |1st arg|.
+; In stack we have: rsp —> |rbp|—|return address|—|1st arg|.
 ; So to appeal with additional arguments we must do rbp += 16.
     add rbp, 16
 
@@ -139,6 +143,7 @@ stack_printf:
 ;
 ; Exit:  rax  = -1, if invalid specifier.
 ;        rax++; rbp += 8, if everything ok.
+;
 ; Destr: rcx
 ; ----------------------------------------------------------------------------------------
 parse_specifier:
