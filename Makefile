@@ -1,15 +1,15 @@
-ASSEMBLER  		= nasm
-ASM_FLAGS		= -felf64
+ASSEMBLER       = nasm
+ASM_FLAGS       = -felf64
 
-LINKER 			= ld
-LD_FLAGS		= -no-pie
+LINKER          = ld
+LD_FLAGS        = -no-pie
 
 SOURCES_DIR     = src
 OBJECTS_DIR     = obj
-LISTING_DIR		= lst
+LISTING_DIR     = lst
 BUILD_DIR       = bin
 
-EXECUTABLE 	    = printf
+EXECUTABLE      = printf
 EXECUTABLE_PATH = $(BUILD_DIR)/$(EXECUTABLE)
 
 SOURCE_FILES  = $(wildcard $(SOURCES_DIR)/*.asm)

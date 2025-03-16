@@ -1,72 +1,320 @@
      1                                  ; ----------------------------------------------------------------------------------------
-     2                                  ; Writes "Hola, mundo" to the console using a C library. Runs on Linux.
-     3                                  ;
-     4                                  ;     nasm -felf64 hola.asm && gcc hola.o && ./a.out
-     5                                  ; ----------------------------------------------------------------------------------------
-     6                                  
-     7                                  section .note.GNU-stack noalloc noexec nowrite progbits
-     8                                  
-     9                                  section .text
-    10                                  global _start
-    11                                  
-    12                                  ; ----------------------------------------------------------------------------------------
-    13                                  
-    14                                  _start:
-    15                                      ; ———————— Testing my_printf ————————
-    16                                      ; Preparing arguments to call my_printf
-    17 00000000 68[00000000]                push format
-    18                                  
-    19 00000005 E80A000000                  call my_printf
-    20                                  
-    21                                      ; ———————— Exit the programm ————————
-    22 0000000A B83C000000                  mov rax, 0x3c ; syscall: exit
-    23 0000000F 4831FF                      xor rdi, rdi  ; exit code = 0
-    24 00000012 0F05                        syscall
-    25                                  
-    26                                  ; ----------------------------------------------------------------------------------------
-    27                                  ; Analog of function printf from libC
-    28                                  ;
-    29                                  ; Args:     rdi = const char* format
-    30                                  ; ----------------------------------------------------------------------------------------
-    31                                  my_printf:
-    32 00000014 55                          push rbp
-    33 00000015 4889E5                      mov rbp, rsp
-    34                                  
-    35 00000018 48BF-                       mov rdi, format
-    35 0000001A [0000000000000000] 
-    36 00000022 BE0A000000                  mov rsi, 10
-    37 00000027 E802000000                  call buf_dump
-    38                                  
-    39 0000002C 5D                          pop rbp
-    40 0000002D C3                          ret
-    41                                  
+     2                                  ; Implementation of custom printf. Runs on Linux.
+     3                                  ; ----------------------------------------------------------------------------------------
+     4                                  
+     5                                  section .data
+     6 00000000 000000000000000000-     NUM_BUFFER      db 64 dup(0)      ; buffer for ASCII codes of printing number's digits
+     6 00000009 000000000000000000-
+     6 00000012 000000000000000000-
+     6 0000001B 000000000000000000-
+     6 00000024 000000000000000000-
+     6 0000002D 000000000000000000-
+     6 00000036 000000000000000000-
+     6 0000003F 00                 
+     7                                  NUM_BUFFER_SIZE equ $ - NUM_BUFFER
+     8 00000040 6F6E65203D2025640A-     FORMAT          db "one = %d", 0xa, 0
+     8 00000049 00                 
+     9 0000004A 746869732069732061-     TEST_STR        db "this is a test string", 0
+     9 00000053 207465737420737472-
+     9 0000005C 696E6700           
+    10                                  JUMP_TABLE:
+    11 00000060 [7200000000000000]                  dq handle_invalid ; a
+    12 00000068 [7200000000000000]                  dq handle_invalid ; b
+    13 00000070 [9700000000000000]                  dq handle_char    ; c
+    14 00000078 [BA00000000000000]                  dq handle_decimal ; d
+    15 00000080 [7200000000000000]                  dq handle_invalid ; e
+    16 00000088 [7200000000000000]                  dq handle_invalid ; f
+    17 00000090 [7200000000000000]                  dq handle_invalid ; g
+    18 00000098 [7200000000000000]                  dq handle_invalid ; h
+    19 000000A0 [7200000000000000]                  dq handle_invalid ; i
+    20 000000A8 [7200000000000000]                  dq handle_invalid ; j
+    21 000000B0 [7200000000000000]                  dq handle_invalid ; k
+    22 000000B8 [7200000000000000]                  dq handle_invalid ; l
+    23 000000C0 [7200000000000000]                  dq handle_invalid ; m
+    24 000000C8 [7200000000000000]                  dq handle_invalid ; n
+    25 000000D0 [7200000000000000]                  dq handle_invalid ; o
+    26 000000D8 [7200000000000000]                  dq handle_invalid ; p
+    27 000000E0 [7200000000000000]                  dq handle_invalid ; q
+    28 000000E8 [7200000000000000]                  dq handle_invalid ; r
+    29 000000F0 [A300000000000000]                  dq handle_string  ; s
+    30 000000F8 [7200000000000000]                  dq handle_invalid ; t
+    31 00000100 [7200000000000000]                  dq handle_invalid ; u
+    32 00000108 [7200000000000000]                  dq handle_invalid ; v
+    33 00000110 [7200000000000000]                  dq handle_invalid ; w
+    34 00000118 [7200000000000000]                  dq handle_invalid ; x
+    35 00000120 [7200000000000000]                  dq handle_invalid ; y
+    36 00000128 [7200000000000000]                  dq handle_invalid ; z
+    37                                  
+    38                                  section .text
+    39                                  global _start
+    40                                  
+    41                                  ; ----------------------------------------------------------------------------------------
     42                                  
-    43                                  ; ----------------------------------------------------------------------------------------
-    44                                  ; Writes buffer in std output
-    45                                  ;
-    46                                  ; Args:     rdi = const char* buffer
-    47                                  ;           rsi = size_t      n_chars
-    48                                  ; ----------------------------------------------------------------------------------------
-    49                                  buf_dump:
-    50 0000002E 55                          push rbp
-    51 0000002F 4889E5                      mov rbp, rsp
-    52                                  
-    53                                      ; ———————— Save args on stack ————————
-    54 00000032 48897DF8                    mov [rbp - 8],  rdi
-    55 00000036 488975F0                    mov [rbp - 16], rsi
-    56                                  
-    57                                      ; ———————— Prepare to syscall write ————————
-    58 0000003A B801000000                  mov rax, 0x01       ; syscall: write(unsigned int fd, const char *buf, size_t count)
-    59 0000003F BF01000000                  mov rdi, 1          ; stdout
-    60 00000044 488B75F8                    mov rsi, [rbp - 8]  ; buffer
-    61 00000048 488B55F0                    mov rdx, [rbp - 16] ; n_chars
-    62 0000004C 0F05                        syscall
-    63                                      ; ——————————————————————————————————————————
-    64                                  
-    65 0000004E 5D                          pop rbp
-    66 0000004F C3                          ret
-    67                                  
-    68                                  section .data
-    69 00000000 466972737420697465-     format db "First iteration, no %"
-    69 00000009 726174696F6E2C206E-
-    69 00000012 6F2025             
+    43                                  _start:
+    44                                  ; Preparing arguments to call printf
+    45 00000000 48BF-                       mov rdi, FORMAT
+    45 00000002 [4000000000000000] 
+    46 0000000A 6A85                        push -123
+    47 0000000C E80A000000                  call printf
+    48                                  
+    49                                  ; rax = syscall code of "exit"
+    50 00000011 B83C000000                  mov rax, 0x3c
+    51                                  ; exit code = 0
+    52 00000016 4831FF                      xor rdi, rdi
+    53 00000019 0F05                        syscall
+    54                                  
+    55                                  ; ----------------------------------------------------------------------------------------
+    56                                  ; Analog of libC's function printf
+    57                                  ;
+    58                                  ; Entry: rdi = format
+    59                                  ;        on stack: additional parameters
+    60                                  ;
+    61                                  ; Exit:  rax = amount of format elements
+    62                                  ;
+    63                                  ; Destr:
+    64                                  ; ----------------------------------------------------------------------------------------
+    65                                  printf:
+    66                                  ; We will use rbp for addressing to additional parameters.
+    67 0000001B 55                          push rbp
+    68 0000001C 4889E5                      mov rbp, rsp
+    69                                  
+    70                                  ; In stack we have: | rbp | —> | return address | —> | 1st arg |.
+    71                                  ; So to appeal with additional arguments we must do rbp += 16.
+    72 0000001F 4883C510                    add rbp, 16
+    73                                  
+    74                                  ; Amount of format elements.
+    75 00000023 4831C0                      xor rax, rax
+    76                                  
+    77                                  .printing_loop:
+    78                                  ; If current symbol is terminating, exit the loop.
+    79 00000026 803F00                      cmp byte [rdi], 0
+    80 00000029 7424                        je .terminate
+    81                                  
+    82                                  ; Else if current symbol is not '%', it is a default char
+    83 0000002B 803F25                      cmp byte [rdi], '%'
+    84 0000002E 7515                        jne .default_char
+    85                                  
+    86                                  ; Else current symbol is a specifier.
+    87                                  ; Increment rdi, because we will parse next symbol.
+    88 00000030 48FFC7                      inc rdi
+    89                                  ; If next symbol is '%' we shouldn't parse anything. Just print '%'
+    90 00000033 803F25                      cmp byte [rdi], '%'
+    91 00000036 740D                        je .default_char
+    92                                  
+    93 00000038 E814000000                  call parse_specifier
+    94                                  ; If rax = -1 in parse_specifier an error occurred, so we exit the loop.
+    95 0000003D 4883F8FF                    cmp rax, -1
+    96 00000041 740C                        je .terminate
+    97                                  ; Else go to the next iteration.
+    98 00000043 EB05                        jmp .next_iter
+    99                                  
+   100                                  .default_char:
+   101                                  ; putchar(rdi)
+   102 00000045 E830000000                  call print_char
+   103                                  
+   104                                  .next_iter:
+   105                                  ; Make rdi pointing on the next char.
+   106 0000004A 48FFC7                      inc rdi
+   107 0000004D EBD7                        jmp .printing_loop
+   108                                  
+   109                                  .terminate:
+   110                                  ; Restore rbp.
+   111 0000004F 5D                          pop rbp
+   112 00000050 C3                          ret
+   113                                  
+   114                                  ; ------------- ---------------------------------------------------------------------------
+   115                                  ; Parse specifier after '%' symbol in the string to print via function 'printf'
+   116                                  ;
+   117                                  ; Entry: [rdi] = specifier
+   118                                  ;        rbp   = argument
+   119                                  ;
+   120                                  ; Exit:  rax  = -1, if invalid specifier.
+   121                                  ;        rax++; rbp += 8, if everything ok.
+   122                                  ; Destr: rcx
+   123                                  ; ----------------------------------------------------------------------------------------
+   124                                  parse_specifier:
+   125                                  ; We will use jump table. It consists of english alphabet letters, so
+   126                                  ; rdi must be between 'a' and 'z' ASCII codes. Else this is invalid specifier
+   127 00000051 803F61                      cmp byte [rdi], 'a'
+   128 00000054 721C                        jb handle_invalid
+   129 00000056 803F7A                      cmp byte [rdi], 'z'
+   130 00000059 7717                        ja handle_invalid
+   131                                  
+   132                                  ; rcx = ASCII code of char == index in jump table
+   133 0000005B 4831C9                      xor rcx, rcx
+   134 0000005E 8A0F                        mov cl, [rdi]
+   135                                  ; Table consists of alphabet letters, so we need to sub 'a' code from ASCII code of char.
+   136 00000060 488B0CCD[58FDFFFF]          mov rcx, [JUMP_TABLE - 'a' * 8 + rcx * 8]
+   137                                  ; rcx = address of label to jump, according to rdx
+   138 00000068 FFE1                        jmp rcx
+   139                                  
+   140                                  ; This is a routine ending of specifier handling functions.
+   141                                  ; These functions don't do ret, because they aren't meant to be called.
+   142                                  ; We access to them via jump on address in jump table.
+   143                                  routine_after_handling_specifier:
+   144                                  ; In rax we have amount of format elements. We parsed another one so rax++.
+   145 0000006A 48FFC0                      inc rax
+   146                                  ; Make rbp pointing on the next argument in the stack.
+   147 0000006D 4883C508                    add rbp, 8
+   148 00000071 C3                          ret
+   149                                  
+   150                                  handle_invalid:
+   151                                  ; -1 is an error return code.
+   152 00000072 48C7C0FFFFFFFF              mov rax, -1
+   153 00000079 C3                          ret
+   154                                  
+   155                                  ; ----------------------------------------------------------------------------------------
+   156                                  ; Print a char to the std output
+   157                                  ;
+   158                                  ; Entry: rdi = &char_to_print
+   159                                  ;
+   160                                  ; Exit:  None
+   161                                  ;
+   162                                  ; Destr: rcx, r11 (syscall destroys it)
+   163                                  ; ----------------------------------------------------------------------------------------
+   164                                  print_char:
+   165 0000007A 50                          push rax
+   166 0000007B 57                          push rdi
+   167 0000007C 56                          push rsi
+   168 0000007D 52                          push rdx
+   169                                  
+   170                                  ; rax = syscall code of "write"
+   171 0000007E B801000000                  mov rax, 0x01
+   172                                  ; rsi = address of buffer
+   173 00000083 4889FE                      mov rsi, rdi
+   174                                  ; rdi = stdout file descriptor
+   175 00000086 BF01000000                  mov rdi, 1
+   176                                  ; rdx = amount of chars to print
+   177 0000008B BA01000000                  mov rdx, 1
+   178                                  
+   179 00000090 0F05                        syscall
+   180                                  
+   181 00000092 5A                          pop rdx
+   182 00000093 5E                          pop rsi
+   183 00000094 5F                          pop rdi
+   184 00000095 58                          pop rax
+   185                                  
+   186 00000096 C3                          ret
+   187                                  
+   188                                  ; ----------------------------------------------------------------------------------------
+   189                                  ; Handle %c specifier.
+   190                                  ; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+   191                                  ;
+   192                                  ; Entry: rbp = &char_to_print
+   193                                  ;
+   194                                  ; Exit:  None
+   195                                  ;
+   196                                  ; Destr: rcx, r11
+   197                                  ; ----------------------------------------------------------------------------------------
+   198                                  handle_char:
+   199                                  ; putchar(rbp)
+   200 00000097 57                          push rdi
+   201 00000098 4889EF                      mov rdi, rbp
+   202 0000009B E8DAFFFFFF                  call print_char
+   203 000000A0 5F                          pop rdi
+   204                                  
+   205 000000A1 EBC7                        jmp routine_after_handling_specifier
+   206                                  
+   207                                  ; ----------------------------------------------------------------------------------------
+   208                                  ; Handle %s specifier.
+   209                                  ; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+   210                                  ;
+   211                                  ; Entry: [rbp] = &string_to_print[0]
+   212                                  ;
+   213                                  ; Exit:  None
+   214                                  ;
+   215                                  ; Destr: rcx, r11
+   216                                  ; ----------------------------------------------------------------------------------------
+   217                                  handle_string:
+   218 000000A3 57                          push rdi
+   219 000000A4 488B7D00                    mov rdi, [rbp]
+   220                                  .next_char:
+   221 000000A8 803F00                      cmp byte [rdi], 0
+   222 000000AB 740A                        je .close
+   223 000000AD E8C8FFFFFF                  call print_char
+   224 000000B2 48FFC7                      inc rdi
+   225 000000B5 EBF1                        jmp .next_char
+   226                                  .close:
+   227 000000B7 5F                          pop rdi
+   228 000000B8 EBB0                        jmp routine_after_handling_specifier
+   229                                  
+   230                                  ; ----------------------------------------------------------------------------------------
+   231                                  ; Handle %d specifier.
+   232                                  ; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+   233                                  ;
+   234                                  ; Entry: rbp = &decimal_to_print
+   235                                  ;
+   236                                  ; Exit:  None
+   237                                  ;
+   238                                  ; Destr: rax, rdi, rcx, rsi, rdx
+   239                                  ; ----------------------------------------------------------------------------------------
+   240                                  handle_decimal:
+   241                                  ; Save registers.
+   242 000000BA 50                          push rax ; Use it for dividing and syscall.
+   243 000000BB 53                          push rbx ; Use it for addressing to number buffer.
+   244 000000BC 51                          push rcx ; Use it for counting digits in number.
+   245 000000BD 52                          push rdx ; Use it for dividing and syscall.
+   246 000000BE 57                          push rdi ; Use it for syscall.
+   247 000000BF 56                          push rsi ; Use it for syscall.
+   248                                  
+   249                                  ; rax = decimal_to_print
+   250 000000C0 488B4500                    mov rax, [rbp]
+   251                                  
+   252                                  ; Check if rax is negative, jns - checks sign flag
+   253 000000C4 4885C0                      test rax, rax
+   254 000000C7 790D                        jns .decimal_is_not_negative
+   255                                  
+   256                                  .decimal_is_negative:
+   257                                  ; print minus sign
+   258 000000C9 BF2D000000                  mov rdi, '-'
+   259 000000CE E8A7FFFFFF                  call print_char
+   260                                  
+   261                                  ; rax = -rax
+   262 000000D3 48F7D8                      neg rax
+   263                                  
+   264                                  .decimal_is_not_negative:
+   265                                  ; rbx - end of the buffer
+   266 000000D6 48BB-                       mov rbx, NUM_BUFFER + NUM_BUFFER_SIZE - 1
+   266 000000D8 [3F00000000000000] 
+   267                                  
+   268                                  ; rsi - base of number
+   269 000000E0 BE0A000000                  mov rsi, 10
+   270                                  
+   271                                  ; rcx - counter of digits
+   272 000000E5 4831C9                      xor rcx, rcx
+   273                                  
+   274                                  .convert_loop:
+   275 000000E8 48FFC1                      inc rcx
+   276                                  ; div r12 <=> (rdx:rax)/r12
+   277                                  ; We divide 64-bit number, so rdx = 0.
+   278 000000EB 4831D2                      xor rdx, rdx
+   279 000000EE 48F7F6                      div rsi
+   280                                  ; Put ASCII CODE of dl into the buffer
+   281 000000F1 80C230                      add dl, '0'
+   282 000000F4 8813                        mov [rbx], dl
+   283                                  ; rbx-- — going to the next cell of buffer (right to left)
+   284 000000F6 48FFCB                      dec rbx
+   285                                  ; Convert while rax != 0.
+   286 000000F9 4885C0                      test rax, rax
+   287 000000FC 75EA                        jnz .convert_loop
+   288                                  
+   289                                  ; rax = syscall code of "write"
+   290 000000FE B801000000                  mov rax, 0x01
+   291                                  ; rsi = address of buffer
+   292 00000103 48BE-                       mov rsi, NUM_BUFFER + NUM_BUFFER_SIZE
+   292 00000105 [4000000000000000] 
+   293 0000010D 4829CE                      sub rsi, rcx
+   294                                  ; rdi = stdout file descriptor
+   295 00000110 BF01000000                  mov rdi, 1
+   296                                  ; rdx = amount of chars to print
+   297 00000115 4889CA                      mov rdx, rcx
+   298                                  
+   299 00000118 0F05                        syscall
+   300                                  
+   301 0000011A 5E                          pop rsi
+   302 0000011B 5F                          pop rdi
+   303 0000011C 5A                          pop rdx
+   304 0000011D 59                          pop rcx
+   305 0000011E 5B                          pop rbx
+   306 0000011F 58                          pop rax
+   307 00000120 E945FFFFFF                  jmp routine_after_handling_specifier
