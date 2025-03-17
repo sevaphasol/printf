@@ -61,7 +61,7 @@ global my_printf
 ;
 ; Exit:  eax = amount of format elements
 ;
-; Destr: r10, r11, rdi, rcx
+; Destr: rdi, rsi, rdx, rcx, r10, r11
 ; ----------------------------------------------------------------------------------------
 my_printf:
 ; In stack we have: rsp —> |return address|— ...
@@ -93,7 +93,7 @@ my_printf:
 ;
 ; Exit:  eax = amount of format elements
 ;
-; Destr: rdi, rcx, r11
+; Destr: rdi, rsi, rdx, rcx, rbx, r11
 ; ----------------------------------------------------------------------------------------
 stack_printf:
 ; We will use rbp for addressing to additional parameters.
@@ -103,6 +103,9 @@ stack_printf:
 ; In stack we have: rsp —> |rbp|—|return address|—|1st arg|.
 ; So to appeal with additional arguments we must do rbp += 16.
     add rbp, 16
+
+; We destroy rbx, but System V ADM64 ABI assume that rbx is a callee-save, so
+    push rbx
 
 ; We will use r10 for current amount of chars in buffer.
 ; In func my_printf r10 contains return address, so we must save it.
@@ -140,6 +143,7 @@ stack_printf:
     jmp .next_iteration
 
 .default_char:
+; cl = current char in format string
     mov cl, [rdi]
     call putchar
 
@@ -154,6 +158,7 @@ stack_printf:
 
 ; Restore r10, rbp.
     pop r10
+    pop rbx
     pop rbp
     ret
 
@@ -166,7 +171,7 @@ stack_printf:
 ; Exit:  eax  = -1, if invalid specifier.
 ;        eax++; rbp += 8, if everything ok.
 ;
-; Destr: rcx
+; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 parse_specifier:
 ; We will use jump table. It consists of english alphabet letters, so
@@ -209,7 +214,7 @@ handle_invalid:
 ;
 ; Exit:  None
 ;
-; Destr: rcx, r11 (syscall destroys it)
+; Destr: r11 (syscall destroys it, if buffer flushes)
 ; ----------------------------------------------------------------------------------------
 putchar:
 ; If current amount of chars in buffer is lower than size of buffer don't flush it
@@ -235,14 +240,16 @@ putchar:
 ;
 ; Exit:  None
 ;
-; Destr: r11
+; Destr: r11 (syscall destroys it)
 ; ----------------------------------------------------------------------------------------
 buffer_flush:
-
 ; If buffer is empty, don't flush it.
     test r10, r10
     jz .exit
 
+; We don't use buffer_flush frequently.
+; So it's better to not scratch registers, than
+; save them every time when print_char is called.
     push rcx
     push rax
     push rsi
@@ -280,7 +287,7 @@ buffer_flush:
 ;
 ; Exit:  None
 ;
-; Destr: rcx, r11
+; Destr: r11
 ; ----------------------------------------------------------------------------------------
 handle_char:
 ; putchar(*rbp)
@@ -300,16 +307,24 @@ handle_char:
 ; Destr: rcx, r11
 ; ----------------------------------------------------------------------------------------
 handle_string:
+; Save rbp
     push rbp
+
+; rbp = address of string to print.
     mov rbp, [rbp]
 
-    xor rcx, rcx
-
 .next_char:
+; cl = char_to_print.
     mov cl, [rbp]
+
+; If current char is terminating end the loop.
     cmp cl, 0
     je .close
+
+; Else print put char in buffer.
     call putchar
+
+; Going to the next char.
     inc rbp
     jmp .next_char
 
@@ -325,12 +340,13 @@ handle_string:
 ;
 ; Exit: None
 ;
-; Destr:
+; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_decimal:
 ; rsi = base of the number
     mov rsi, 10
     call number_to_ascii
+
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
@@ -341,12 +357,13 @@ handle_decimal:
 ;
 ; Exit: None
 ;
-; Destr:
+; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_binary:
 ; rsi = base of the number
     mov rsi, 2
     call number_to_ascii
+
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
@@ -357,12 +374,13 @@ handle_binary:
 ;
 ; Exit: None
 ;
-; Destr:
+; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_octal:
 ; rsi = base of the number
     mov rsi, 8
     call number_to_ascii
+
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
@@ -373,12 +391,13 @@ handle_octal:
 ;
 ; Exit: None
 ;
-; Destr:
+; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_hex:
 ; rsi = base of the number
     mov rsi, 16
     call number_to_ascii
+
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
@@ -389,15 +408,12 @@ handle_hex:
 ;
 ; Exit:  None
 ;
-; Destr: rax, rdi, rcx, rsi, rdx
+; Destr: rax, rbx, rcx, rdx, rdi
 ; ----------------------------------------------------------------------------------------
 number_to_ascii:
-; Save registers.
-    push rax ; Use it for dividing and syscall.
-    push rbx ; Use it for addressing to number buffer.
-    push rcx ; Use it for counting digits in number.
-    push rdx ; Use it for dividing and syscall.
-    push rdi ; Use it for syscall.
+; Save rax and rdi, because stack_printf uses them.
+    push rdi
+    push rax
 
 ; rax = decimal_to_print
     mov eax, [rbp]
@@ -411,7 +427,7 @@ number_to_ascii:
     mov cl, '-'
     call putchar
 
-; rax = -rax
+; eax = -eax
     neg eax
 
 .decimal_is_not_negative:
@@ -422,13 +438,20 @@ number_to_ascii:
     xor rcx, rcx
 
 .convert_loop:
+; One more digit.
     inc rcx
+
 ; div r12 <=> (rdx:rax)/r12
 ; We divide 64-bit number, so rdx = 0.
     xor rdx, rdx
     div rsi
-; Put ASCII CODE of dl into the buffer
+
+; In rdx we have a division remainder.
+; Divider is less than 255, so hole remainder is in dl.
+
+; Get ASCII code of remainder.
     mov dl, [CONVERT_ARRAY + rdx]
+; Put ASCII code of remainder in the NUM_BUFFER.
     mov [rbx], dl
 ; rbx-- — going to the next cell of buffer (right to left)
     dec rbx
@@ -436,40 +459,42 @@ number_to_ascii:
     test eax, eax
     jnz .convert_loop
 
-; If we can, we merge PRINT_BUFFER and NUM_BUFFER.
-; If length of number is less than free space in PRINT_BUFFER, we can merge them.
+; If length of number is less than free space in PRINT_BUFFER,
+; we can merge part of NUM_BUFFER (number to print) and PRINT_BUFFER.
 
-; Save r12
+; Save r12, because System V AMD64 ABI assume that r12 is a callee-save
     push r12
-; r12 = PRINT_BUFFER_SIZE - r10
+
+; r12 = PRINT_BUFFER_SIZE - r10 — amount of free space in PRINT_BUFFER.
     mov r12, r10
     sub r12, PRINT_BUFFER_SIZE
     neg r12
 
+; If we can merge buffers.
     cmp rcx, r12
-
     jb .merge_buffers
 
-; Else we should flush PRINT_BUFFER, than merge buffers
+; Else we must flush PRINT_BUFFER, than merge buffers.
     call buffer_flush
 
 .merge_buffers:
-
-; rsi = NUM_BUFFER + NUM_BUFFER_SIZE - rcx
+; rsi = NUM_BUFFER + NUM_BUFFER_SIZE - rcx — address of number to print.
     mov rsi, rcx
     sub rsi, NUM_BUFFER + NUM_BUFFER_SIZE
     neg rsi
 
+; rdi = address of free space in PRINT_BUFFER.
     lea rdi, [PRINT_BUFFER + r10]
 
+; PRINT_BUFFER expands, because of merging buffers.
     add r10, rcx
 
+; Putting number in PRINT_BUFFER.
     rep movsb
 
+; Restore saved resisters
     pop r12
-    pop rdi
-    pop rdx
-    pop rcx
-    pop rbx
     pop rax
+    pop rdi
+
     ret

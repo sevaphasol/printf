@@ -8,23 +8,23 @@ extern "C" void _start()
 {
     /* Testing my_printf. It returns amount of formatted elements. */
     /* If there is an error, it returns -1.                        */
-    int ret_value1 = my_printf("\na lot of vars  "
-                               "%%b: %b %b, "
-                               "%%c: %c %c, "
-                               "%%o: %o %o, "
-                               "%%d: %d %d, "
-                               "%%x: %x %x, "
-                               "%%s: %s\n",
-                                0, 1,
-                                '2', '3',
-                                04, 05,
-                                6, 7,
-                                0x8, 0x9,
-                                "10 11");
-    my_printf("a lot of vars returned %d\n\n", ret_value1);
+    int test1 = my_printf("\na lot of vars  "
+                          "%%b: %b %b, "
+                          "%%c: %c %c, "
+                          "%%o: %o %o, "
+                          "%%d: %d %d, "
+                          "%%x: %x %x, "
+                          "%%s: %s\n",
+                           0, 1,
+                           '2', '3',
+                           04, 05,
+                           6, 7,
+                           0x8, 0x9,
+                           "10 11");
+    my_printf("a lot of vars returned %d\n\n", test1);
 
-    int ret_value2 = my_printf("maximum positive int %d\n", 0x7fffffff);
-    my_printf("maximum positive int returned %d\n\n", ret_value2);
+    int test2 = my_printf("maximum positive int %d\n", 0x7fffffff);
+    my_printf("maximum positive int returned %d\n\n", test2);
 
     /* We compile with -nostdlib flag, so we have to exit the program all alone. */
     /* asm - insert asm code, volatile - no need for an optimization.            */
