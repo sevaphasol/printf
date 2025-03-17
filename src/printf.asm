@@ -1,14 +1,22 @@
 ; ----------------------------------------------------------------------------------------
-; Implementation of printf from libC. Runs on Linux.
+; Implementation of libC printf analog. Runs on Linux.
 ; Supported specifiers: %%, %c, %s, %d, %x, %o, %b.
 ; ----------------------------------------------------------------------------------------
 
 section .data
-NUM_BUFFER      db  64 dup(0)          ; buffer for ASCII codes of printing number's digits
-NUM_BUFFER_SIZE equ $ - NUM_BUFFER
 
-CONVERT_ARRAY   db  "0123456789abcdef" ; array for converting numbers to ASCII
+; Buffer for ASCII codes of number's digits.
+NUM_BUFFER        db  64 dup(0)
+NUM_BUFFER_SIZE   equ $ - NUM_BUFFER
 
+; Buffer for chars to print.
+PRINT_BUFFER      db  64 dup (0)
+PRINT_BUFFER_SIZE equ $ - PRINT_BUFFER
+
+; Array for converting numbers to ASCII.
+CONVERT_ARRAY     db  "0123456789abcdef"
+
+; Jump table for handling specifiers.
 JUMP_TABLE:
             dq handle_invalid ; a
             dq handle_binary  ; b
@@ -41,7 +49,7 @@ section .text
 global my_printf
 
 ; ----------------------------------------------------------------------------------------
-; Wrapper for analog of libC's function printf (System V AMD64 ABI)
+; Wrapper for libC's printf analog (System V AMD64 ABI)
 ;
 ; Entry: rdi   = format
 ;        rsi   = 1st argument
@@ -51,27 +59,28 @@ global my_printf
 ;        r9    = 5th argument
 ;        stack = rsp —> |6th arg|—|7th arg|— ...
 ;
-; Exit:  rax = amount of format elements
+; Exit:  eax = amount of format elements
 ;
-; Destr: r10, rdi, rcx
+; Destr: r10, r11, rdi, rcx
 ; ----------------------------------------------------------------------------------------
 my_printf:
 ; In stack we have: rsp —> |return address|— ...
 ; We want make it:  rsp —> |1th arg|—|2nd arg|— ... —|last arg|—|return address|
     pop r10
+
 ; Pushing 1st to 5th arguments. 6th+ arguments are already in stack.
+; If there is less than 5 arguments, it won't be crucial if we push extra registers.
     push r9
     push r8
     push rcx
     push rdx
     push rsi
-; If there is less than 5 arguments, it won't be crucial if we push extra registers.
 
     call stack_printf
 
 ; We must balance the stack.
 ; We pushed 5 registers — each 8 bytes, so it will be 40 bytes.
-    add rsp, 48
+    add rsp, 40
 
 ; We don't have return address in stack, so we can do push r10, than ret. Or just
     jmp r10
@@ -82,9 +91,9 @@ my_printf:
 ; Entry: rdi = format
 ;        on stack: additional parameters
 ;
-; Exit:  rax = amount of format elements
+; Exit:  eax = amount of format elements
 ;
-; Destr: rdi, rcx
+; Destr: rdi, rcx, r11
 ; ----------------------------------------------------------------------------------------
 stack_printf:
 ; We will use rbp for addressing to additional parameters.
@@ -95,8 +104,13 @@ stack_printf:
 ; So to appeal with additional arguments we must do rbp += 16.
     add rbp, 16
 
-; Amount of format elements.
-    xor rax, rax
+; We will use r10 for current amount of chars in buffer.
+; In func my_printf r10 contains return address, so we must save it.
+    push r10
+    xor r10, r10
+
+; Initialize amount of format elements: eax = 0.
+    xor eax, eax
 
 .printing_loop:
 ; If current symbol is terminating, exit the loop.
@@ -110,39 +124,47 @@ stack_printf:
 ; Else current symbol is a specifier.
 ; Increment rdi, because we will parse next symbol.
     inc rdi
+
 ; If next symbol is '%' we shouldn't parse anything. Just print '%'
     cmp byte [rdi], '%'
     je .default_char
 
+; Else we parse specifier.
     call parse_specifier
-; If rax = -1 in parse_specifier an error occurred, so we exit the loop.
-    cmp rax, -1
+
+; If eax = -1 in parse_specifier an error occurred, so we exit the loop.
+    cmp eax, -1
     je .terminate
+
 ; Else go to the next iteration.
-    jmp .next_iter
+    jmp .next_iteration
 
 .default_char:
-; putchar(rdi)
-    call print_char
+    mov cl, [rdi]
+    call putchar
 
-.next_iter:
+.next_iteration:
 ; Make rdi pointing on the next char.
     inc rdi
     jmp .printing_loop
 
 .terminate:
-; Restore rbp.
+; Flush the buffer.
+    call buffer_flush
+
+; Restore r10, rbp.
+    pop r10
     pop rbp
     ret
 
 ; ------------- ---------------------------------------------------------------------------
-; Parse specifier after '%' symbol in the string to print via function 'printf'
+; Parse specifier after '%' symbol in the string to print via function 'my_printf'
 ;
 ; Entry: [rdi] = specifier
 ;        rbp   = argument
 ;
-; Exit:  rax  = -1, if invalid specifier.
-;        rax++; rbp += 8, if everything ok.
+; Exit:  eax  = -1, if invalid specifier.
+;        eax++; rbp += 8, if everything ok.
 ;
 ; Destr: rcx
 ; ----------------------------------------------------------------------------------------
@@ -154,9 +176,10 @@ parse_specifier:
     cmp byte [rdi], 'z'
     ja handle_invalid
 
-; rcx = ASCII code of char == index in jump table
+; cl = ASCII code of char == index in jump table
     xor rcx, rcx
     mov cl, [rdi]
+
 ; Table consists of alphabet letters, so we need to sub 'a' code from ASCII code of char.
     mov rcx, [JUMP_TABLE - 'a' * 8 + rcx * 8]
 ; rcx = address of label to jump, according to rdx
@@ -166,48 +189,87 @@ parse_specifier:
 ; These functions don't do ret, because they aren't meant to be called.
 ; We access to them via jump on address in jump table.
 routine_after_handling_specifier:
-; In rax we have amount of format elements. We parsed another one so rax++.
-    inc rax
+; In eax we have amount of format elements. We parsed another one so eax++.
+    inc eax
+
 ; Make rbp pointing on the next argument in the stack.
     add rbp, 8
     ret
 
 handle_invalid:
 ; -1 is an error return code.
-    mov rax, -1
+    mov eax, -1
     ret
 
 ; ----------------------------------------------------------------------------------------
-; Print a char to the std output
+; Put a char into the PRINTING_BUFFER. If needed, flush it.
 ;
-; Entry: rdi = &char_to_print
+; Entry: cl  = char_to_print
+;        r10 = current amount of chars in buffer
 ;
 ; Exit:  None
 ;
 ; Destr: rcx, r11 (syscall destroys it)
 ; ----------------------------------------------------------------------------------------
-print_char:
+putchar:
+; If current amount of chars in buffer is lower than size of buffer don't flush it
+    cmp r10, PRINT_BUFFER_SIZE
+    jb .no_flush
+
+; buffer_flush will make r10 = 0, which will update buffer.
+    call buffer_flush
+
+.no_flush:
+; Put into the buffer cl == char_to_print.
+    mov byte [PRINT_BUFFER + r10], cl
+
+; Moving to the next position in the PRINTING_BUFFER.
+    inc r10
+
+    ret
+
+; ----------------------------------------------------------------------------------------
+; Flushes first r10 bytes of PRINT_BUFFER
+;
+; Entry: r10 = amount of bytes to flush
+;
+; Exit:  None
+;
+; Destr: r11
+; ----------------------------------------------------------------------------------------
+buffer_flush:
+
+; If buffer is empty, don't flush it.
+    test r10, r10
+    jz .exit
+
+    push rcx
     push rax
-    push rdi
     push rsi
+    push rdi
     push rdx
 
 ; rax = syscall code of "write"
     mov rax, 0x01
 ; rsi = address of buffer
-    mov rsi, rdi
+    mov rsi, PRINT_BUFFER
 ; rdi = stdout file descriptor
     mov rdi, 1
 ; rdx = amount of chars to print
-    mov rdx, 1
+    mov rdx, r10
 
     syscall
 
-    pop rdx
-    pop rsi
-    pop rdi
-    pop rax
+; Update amount of chars in buffer: r10 = 0.
+    xor r10, r10
 
+    pop rdx
+    pop rdi
+    pop rsi
+    pop rax
+    pop rcx
+
+.exit:
     ret
 
 ; ----------------------------------------------------------------------------------------
@@ -221,11 +283,9 @@ print_char:
 ; Destr: rcx, r11
 ; ----------------------------------------------------------------------------------------
 handle_char:
-; putchar(rbp)
-    push rdi
-    mov rdi, rbp
-    call print_char
-    pop rdi
+; putchar(*rbp)
+    mov cl, [rbp]
+    call putchar
 
     jmp routine_after_handling_specifier
 
@@ -240,16 +300,21 @@ handle_char:
 ; Destr: rcx, r11
 ; ----------------------------------------------------------------------------------------
 handle_string:
-    push rdi
-    mov rdi, [rbp]
+    push rbp
+    mov rbp, [rbp]
+
+    xor rcx, rcx
+
 .next_char:
-    cmp byte [rdi], 0
+    mov cl, [rbp]
+    cmp cl, 0
     je .close
-    call print_char
-    inc rdi
+    call putchar
+    inc rbp
     jmp .next_char
+
 .close:
-    pop rdi
+    pop rbp
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
@@ -317,7 +382,7 @@ handle_hex:
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
-; Print number in specific base.
+; Print number (32 bytes) in specific base.
 ;
 ; Entry: rbp = &number_to_print
 ;        rsi = base
@@ -335,19 +400,19 @@ number_to_ascii:
     push rdi ; Use it for syscall.
 
 ; rax = decimal_to_print
-    mov rax, [rbp]
+    mov eax, [rbp]
 
 ; Check if rax is negative, jns - checks sign flag
-    test rax, rax
+    test eax, eax
     jns .decimal_is_not_negative
 
 .decimal_is_negative:
 ; print minus sign
-    mov rdi, '-'
-    call print_char
+    mov cl, '-'
+    call putchar
 
 ; rax = -rax
-    neg rax
+    neg eax
 
 .decimal_is_not_negative:
 ; rbx - end of the buffer
@@ -368,21 +433,40 @@ number_to_ascii:
 ; rbx-- — going to the next cell of buffer (right to left)
     dec rbx
 ; Convert while rax != 0.
-    test rax, rax
+    test eax, eax
     jnz .convert_loop
 
-; rax = syscall code of "write"
-    mov rax, 0x01
-; rsi = address of buffer
-    mov rsi, NUM_BUFFER + NUM_BUFFER_SIZE
-    sub rsi, rcx
-; rdi = stdout file descriptor
-    mov rdi, 1
-; rdx = amount of chars to print
-    mov rdx, rcx
+; If we can, we merge PRINT_BUFFER and NUM_BUFFER.
+; If length of number is less than free space in PRINT_BUFFER, we can merge them.
 
-    syscall
+; Save r12
+    push r12
+; r12 = PRINT_BUFFER_SIZE - r10
+    mov r12, r10
+    sub r12, PRINT_BUFFER_SIZE
+    neg r12
 
+    cmp rcx, r12
+
+    jb .merge_buffers
+
+; Else we should flush PRINT_BUFFER, than merge buffers
+    call buffer_flush
+
+.merge_buffers:
+
+; rsi = NUM_BUFFER + NUM_BUFFER_SIZE - rcx
+    mov rsi, rcx
+    sub rsi, NUM_BUFFER + NUM_BUFFER_SIZE
+    neg rsi
+
+    lea rdi, [PRINT_BUFFER + r10]
+
+    add r10, rcx
+
+    rep movsb
+
+    pop r12
     pop rdi
     pop rdx
     pop rcx

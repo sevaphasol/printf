@@ -1,6 +1,6 @@
 /* We have to use extern "C" here, because we don't want the compiler to change the function names. */
 /* It happens because of "name mangling" for .cpp files.                                            */
-extern "C" long my_printf(const char* format, ...);
+extern "C" int my_printf(const char* format, ...);
 
 /* We compile with -nostdlib flag, so we don't have an entry point.     */
 /* Because of that we name this function _start — it is an entry point. */
@@ -8,8 +8,23 @@ extern "C" void _start()
 {
     /* Testing my_printf. It returns amount of formatted elements. */
     /* If there is an error, it returns -1.                        */
-    long ret_value = my_printf("Hello %x %o %d %s %%!\n", 0x123, 0123, 111111111111, "\ttest string");
-    my_printf("%d\n", ret_value);
+    int ret_value1 = my_printf("\na lot of vars  "
+                               "%%b: %b %b, "
+                               "%%c: %c %c, "
+                               "%%o: %o %o, "
+                               "%%d: %d %d, "
+                               "%%x: %x %x, "
+                               "%%s: %s\n",
+                                0, 1,
+                                '2', '3',
+                                04, 05,
+                                6, 7,
+                                0x8, 0x9,
+                                "10 11");
+    my_printf("a lot of vars returned %d\n\n", ret_value1);
+
+    int ret_value2 = my_printf("maximum positive int %d\n", 0x7fffffff);
+    my_printf("maximum positive int returned %d\n\n", ret_value2);
 
     /* We compile with -nostdlib flag, so we have to exit the program all alone. */
     /* asm - insert asm code, volatile - no need for an optimization.            */
