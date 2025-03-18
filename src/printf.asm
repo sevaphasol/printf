@@ -13,6 +13,14 @@ NUM_BUFFER_SIZE   equ $ - NUM_BUFFER
 PRINT_BUFFER      db  64 dup (0)
 PRINT_BUFFER_SIZE equ $ - PRINT_BUFFER
 
+section .rodata
+
+MASKS_FOR_CONVERTING:
+            db 0b00000001
+            db 0b00000011
+            db 0b00000111
+            db 0b00001111
+
 ; Array for converting numbers to ASCII.
 CONVERT_ARRAY     db  "0123456789abcdef"
 
@@ -306,7 +314,7 @@ handle_char:
 ;
 ; Destr: rcx, r11
 ; ----------------------------------------------------------------------------------------
-handle_string:
+handle_string: ; TODO strlen + movsb - merging string and PRINT_BUFFER
 ; Save rbp
     push rbp
 
@@ -360,9 +368,13 @@ handle_decimal:
 ; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_binary:
-; rsi = base of the number
-    mov rsi, 2
-    call number_to_ascii
+; eax = number_to_print
+    mov eax, [rbp]
+; base = 2^1, rcx = ln_2(base)
+    mov rcx, 1
+; rbx — bit mask for getting bytes which we need for this base.
+    mov rbx, 0b00000001
+    call power_of_two_to_ascii
 
     jmp routine_after_handling_specifier
 
@@ -377,9 +389,13 @@ handle_binary:
 ; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_octal:
-; rsi = base of the number
-    mov rsi, 8
-    call number_to_ascii
+; eax = number_to_print
+    mov eax, [rbp]
+; base = 2^3, rcx = ln_2(base)
+    mov rcx, 3
+; rbx — bit mask for getting bytes which we need for this base.
+    mov rbx, 0b00000111
+    call power_of_two_to_ascii
 
     jmp routine_after_handling_specifier
 
@@ -394,16 +410,20 @@ handle_octal:
 ; Destr: rbx, rcx, rdx
 ; ----------------------------------------------------------------------------------------
 handle_hex:
-; rsi = base of the number
-    mov rsi, 16
-    call number_to_ascii
+; eax = number_to_print
+    mov eax, [rbp]
+; base = 2^4, rcx = ln_2(base)
+    mov rcx, 4
+; rbx — bit mask for getting bytes which we need for this base.
+    mov rbx, 0b00001111
+    call power_of_two_to_ascii
 
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
 ; Print number (32 bytes) in specific base.
 ;
-; Entry: rbp = &number_to_print
+; Entry: eax = number_to_print
 ;        rsi = base
 ;
 ; Exit:  None
@@ -415,7 +435,7 @@ number_to_ascii:
     push rdi
     push rax
 
-; rax = decimal_to_print
+; eax = number_to_print
     mov eax, [rbp]
 
 ; Check if rax is negative, jns - checks sign flag
@@ -498,3 +518,159 @@ number_to_ascii:
     pop rdi
 
     ret
+
+
+; ----------------------------------------------------------------------------------------
+; Print number (32 bytes) in power of 2 base.
+;
+; Entry: eax = number_to_print
+;        rcx = power of 2 (for example base = 16 <=> cl = 4)
+;        rbx = bit mask
+;
+; Exit:  None
+;
+; Destr: rdx, rsi, rcx, r8
+; ----------------------------------------------------------------------------------------
+power_of_two_to_ascii:
+; Save rax and rdi, because stack_printf uses them.
+    push rdi
+    push rax
+
+; We are getting ASCII codes from CONVERT_ARRAY.
+    mov rsi, CONVERT_ARRAY
+; rdi - end of the filling buffer.
+    mov rdi, NUM_BUFFER + NUM_BUFFER_SIZE - 1
+; We are filling the buffer backwards.
+    std
+
+.convert_loop:
+; rdx — copy of current number (rax == eax).
+    mov rdx, rax
+; Moving high bits, which we don't need.
+    and rdx, rbx
+; Going to the next bits.
+    shr eax, cl
+
+; [rsi + rdx] = ASCII CODE of dl
+    add rsi, rdx
+
+; Put ASCII code of dl in the NUM_BUFFER.
+    movsb
+; Return rsi to the previous value
+    mov rsi, CONVERT_ARRAY
+
+; Convert while rax != 0.
+    test eax, eax
+    jnz .convert_loop
+
+; rcx — amount of chars, putted in the NUM_BUFFER <=> length of number.
+    mov rcx,  NUM_BUFFER + NUM_BUFFER_SIZE - 1
+    sub rcx, rdi
+
+; If length of number is less than free space in PRINT_BUFFER,
+; we can merge part of NUM_BUFFER (number to print) and PRINT_BUFFER.
+
+; r8 = PRINT_BUFFER_SIZE - r10 — amount of free space in PRINT_BUFFER.
+    mov r8, PRINT_BUFFER_SIZE
+    sub r8, r10
+
+; If we can merge buffers.
+    cmp rcx, r8
+    jb .merge_buffers
+
+; Else we must flush PRINT_BUFFER, than merge buffers.
+    call buffer_flush
+
+.merge_buffers:
+; rsi = NUM_BUFFER + NUM_BUFFER_SIZE - rcx — address of number to print.
+    mov rsi, rcx
+    sub rsi, NUM_BUFFER + NUM_BUFFER_SIZE
+    neg rsi
+
+; rdi = address of free space in PRINT_BUFFER.
+    lea rdi, [PRINT_BUFFER + r10]
+
+; PRINT_BUFFER expands, because of merging buffers.
+    add r10, rcx
+
+; Now we are filling forwards.
+    cld
+
+; Putting number in PRINT_BUFFER.
+    rep movsb
+
+; Restore saved resisters
+    pop rax
+    pop rdi
+
+    ret
+
+; ; ----------------------------------------------------------------------------------------
+; ; Print number (32 bytes) in even power of 2 base.
+; ;
+; ; Entry: rbp = &number_to_print
+; ;        cl  = power of 2 (for example base = 16 <=> cl = 4)
+; ;
+; ; Exit:  None
+; ;
+; ; Destr: rax, rbx, rcx, rdx, rdi
+; ; ----------------------------------------------------------------------------------------
+; even_power_of_two_to_ascii:
+;     push rax
+;     push rcx
+;     push rdx
+;     push rdi
+;
+; ; eax = number_to_print
+;     mov eax, [rbp]
+;
+; ; bl = mask for converting
+;     mov bx, [MASKS_FOR_CONVERTING - 1 + rcx]
+;
+; ; We need to check if eax == 0, because if so we will stack in endless loop.
+;     test eax, eax
+;     jnz .not_zero
+;
+;     mov cl, '0'
+;     call putchar
+;     jmp .exit
+;
+; .not_zero:
+; ; rdi - counter of trailing zeros
+;     xor rdi, rdi
+;     dec rdi
+;
+; ; Skip trailing zeros in eax.
+; .skip_trailing_zeros:
+;     inc rdi
+;     rol eax, cl
+;     mov dl, al
+;     and dl, bl
+;     jz .skip_trailing_zeros
+;
+; ; rdi = amount of significant digits in the number
+;     push rdx
+;     mov rdx, rdi
+;     mov rdi, 32
+;     sub rdi, rdx
+;     pop rdx
+;
+; ; In dl we have first significant digits of the number
+; .next_char:
+;     push rcx
+;     mov cl, [CONVERT_ARRAY + rdx]
+;     call putchar
+;     pop rcx
+;     rol eax, cl
+;     mov dl, al
+;     and dl, bl
+;     dec rdi
+;     test rdi, rdi
+;     jnz .next_char
+;
+; .exit:
+;     pop rdi
+;     pop rdx
+;     pop rcx
+;     pop rax
+;     ret

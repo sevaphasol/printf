@@ -7,7 +7,7 @@ COMPILER          = gcc
 COMPILER_FLAGS    = -c
 
 LINKER            = gcc
-LD_FLAGS          = -no-pie -z noexecstack -nostdlib
+LD_FLAGS          = -no-pie -z noexecstack
 
 # ---------------------------------------------------------------------------------------- #
 
