@@ -13,7 +13,14 @@ NUM_BUFFER_SIZE   equ $ - NUM_BUFFER
 PRINT_BUFFER      db  64 dup (0)
 PRINT_BUFFER_SIZE equ $ - PRINT_BUFFER
 
+; Amount of digits after dot (for %f).
+PRECISION         equ 6
+
 section .rodata
+
+; Need for movsd in xmm register in %f handling.
+ONE               dq 1.
+TEN               dq 10.0
 
 ; Array for converting numbers to ASCII.
 CONVERT_ARRAY     db  "0123456789abcdef"
@@ -25,7 +32,7 @@ JUMP_TABLE:
             dq handle_char    ; c
             dq handle_decimal ; d
             dq handle_invalid ; e
-            dq handle_invalid ; f
+            dq handle_float   ; f
             dq handle_invalid ; g
             dq handle_invalid ; h
             dq handle_invalid ; i
@@ -104,11 +111,24 @@ my_printf:
     push rdx
     push rsi
 
+; Pushing 1st to 7th float arguments. 7th+ float arguments are already in stack.
+; Allocate memory on stack — 8 registers, each 8 bytes.
+    sub rsp, 8 * 8
+
+    movsd [rsp + 0 * 8], xmm0
+    movsd [rsp + 1 * 8], xmm1
+    movsd [rsp + 2 * 8], xmm2
+    movsd [rsp + 3 * 8], xmm3
+    movsd [rsp + 4 * 8], xmm4
+    movsd [rsp + 5 * 8], xmm5
+    movsd [rsp + 6 * 8], xmm6
+    movsd [rsp + 7 * 8], xmm7
+
     call stack_printf
 
 ; We must balance the stack.
-; We pushed 5 registers — each 8 bytes, so it will be 40 bytes.
-    add rsp, 40
+; We pushed 13 registers — each 8 bytes.
+    add rsp, 13 * 8
 
 ; We don't have return address in stack, so we can do push r10, than ret. Or just
     jmp r10
@@ -124,13 +144,23 @@ my_printf:
 ; Destr: rdi, rsi, rdx, rcx, rbx, r11, r8
 ; ----------------------------------------------------------------------------------------
 stack_printf:
-; We will use rbp for addressing to additional parameters.
+; We will use rbp for addressing to additional args, we must save (rbp is a callee-saved).
     push rbp
-    mov rbp, rsp
-
-; In stack we have: rsp —> |rbp|—|return address|—|1st arg|.
+; In stack we have: rsp —> |rbp|—|return address|—|... 8 float args ...|-|1st arg|.
 ; So to appeal with additional arguments we must do rbp += 16.
-    add rbp, 16
+    lea rbp, [rsp + 16 + 8 * 8]
+
+; We will use r9 for addressing to float args.
+    lea r9, [rsp + 16]
+; We will use r11 for addressing to first arguments, which caller pushed in the stack.
+; We need this for float arguments to rightly behave in situations such as
+; format = "[%f 9+ times][default specifiers]"
+    lea r11, [rsp + 16 + 13 * 8]
+
+; We will use r12 for counting amount of printed floats.
+; r12 is a callee-saved, so we need to save it.
+    push r12
+    xor r12, r12
 
 ; We destroy rbx, but System V ADM64 ABI assume that rbx is a callee-save, so
     push rbx
@@ -184,9 +214,12 @@ stack_printf:
 ; Flush the buffer.
     call buffer_flush
 
+    add rax, r12
+
 ; Restore r10, rbp.
     pop r10
     pop rbx
+    pop r12
     pop rbp
     ret
 
@@ -227,6 +260,36 @@ routine_after_handling_specifier:
 
 ; Make rbp pointing on the next argument in the stack.
     add rbp, 8
+
+; If we wasted rsi, rdx, rcx, r8, r9 we should synchronize
+    cmp eax, 5
+    je  .now_we_take_default_arguments_from_stack
+    ja  .synchornize_float_pointer
+    jmp .exit_from_routine_after_handling_specifier
+
+.now_we_take_default_arguments_from_stack:
+    lea rbp, [r11 + r12 * 8 - 8 * 8]
+    jmp .exit_from_routine_after_handling_specifier
+.synchornize_float_pointer:
+    inc r12
+.exit_from_routine_after_handling_specifier:
+    ret
+
+routine_after_handling_f_specifier:
+; ; In eax we have amount of format elements. We parsed another one so eax++.
+;     inc eax
+
+; We parsed another double.
+    inc r12
+
+    cmp eax, 5
+    jae .synchornize_default_pointer
+    jmp .exit_from_routine_after_handling_f_specifier
+
+.synchornize_default_pointer:
+    add rbp, 8
+
+.exit_from_routine_after_handling_f_specifier:
     ret
 
 handle_invalid:
@@ -242,7 +305,7 @@ handle_invalid:
 ;
 ; Exit:  None
 ;
-; Destr: r11 (syscall destroys it, if buffer flushes)
+; Destr: None
 ; ----------------------------------------------------------------------------------------
 %macro put_buffer 0
 ; If length of buffer is less than free space in PRINT_BUFFER, we can merge them.
@@ -279,7 +342,7 @@ handle_invalid:
 ;
 ; Exit:  None
 ;
-; Destr: r11 (syscall destroys it)
+; Destr: None
 ; ----------------------------------------------------------------------------------------
 buffer_flush:
 ; If buffer is empty, don't flush it.
@@ -289,6 +352,8 @@ buffer_flush:
 ; We don't use buffer_flush frequently.
 ; So it's better to not scratch registers, than
 ; save them every time when print_char is called.
+; We save r11 and rcx, because syscall may destroy it.
+    push r11
     push rcx
     push rax
     push rsi
@@ -314,6 +379,7 @@ buffer_flush:
     pop rsi
     pop rax
     pop rcx
+    pop r11
 
 .exit:
     ret
@@ -326,7 +392,7 @@ buffer_flush:
 ;
 ; Exit:  None
 ;
-; Destr: r11
+; Destr: cl
 ; ----------------------------------------------------------------------------------------
 handle_char:
     mov cl, [rbp]
@@ -342,7 +408,7 @@ handle_char:
 ;
 ; Exit:  None
 ;
-; Destr: rcx, r11
+; Destr: rcx
 ; ----------------------------------------------------------------------------------------
 handle_string:
 ; Save rbp
@@ -487,9 +553,9 @@ handle_hex:
     jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
-; Print number (32 bytes) in specific base.
+; Print number in specific base.
 ;
-; Entry: eax = number_to_print
+; Entry: rax = number_to_print
 ;        r8 = base
 ;
 ; Exit:  None
@@ -608,5 +674,212 @@ power_of_two_to_ascii:
 
 ; Restore saved registers
     pop rdi
+
+    ret
+
+
+; ----------------------------------------------------------------------------------------
+; Handle %f specifier
+;
+; Entry: r12             = amount_of_printed_floats
+;        [r9 + r12]      = float_to_print  (if r12 <= 7)
+;        [r11 + r12 - 8] = &float_to_print (if r12 >= 8)
+;
+; Exit:  None
+;
+; Destr: rax, rdx, xmm0, xmm1, xmm2
+; ----------------------------------------------------------------------------------------
+handle_float:
+; Save rax and rdi, because stack_printf uses it.
+    push rax
+    push rdi
+
+; If amount_of_printed_chars is less than 8, we should address to saved xmm0, ... on stack
+    cmp r12, 8
+    jae .use_9_and_more_floats
+
+; rax = float_to_print
+    movsd xmm0, [r9 + r12 * 8]
+    jmp .convert_float_to_chars
+
+.use_9_and_more_floats:
+    movsd xmm0, [r11 + r12 * 8 - 8 * 8]
+
+.convert_float_to_chars:
+; Check if xmm0 is negative.
+; eax = sign bin of xmm0.
+    movmskpd eax, xmm0
+; If eax is 0, it means that xmm0's sign bit is 0, so xmm0 is not negative.
+    test eax, 1
+    jz .double_is_not_negative
+
+; Else xmm0 is negative
+    put_symbol '-'
+
+; xmm0 = 0.0 - xmm0 = -xmm0
+; xmm1 = 0.0
+    xorpd xmm1, xmm1
+; xmm1 = 0.0 - xmm0
+    subsd xmm1, xmm0
+; xmm0 = xmm1
+    movapd xmm0, xmm1
+
+.double_is_not_negative:
+    call split_xmm0
+; rax = integer;
+; rdx = fraction;
+; rcx = amount of trailing zeros
+    call print_integer_and_fraction
+
+; Restore saved registers.
+    pop rdi
+    pop rax
+
+    jmp routine_after_handling_f_specifier
+
+; ----------------------------------------------------------------------------------------
+; Puts in buffer amount of zeroes
+;
+; Entry: rcx = amount of zeroes to print
+;
+; Exit:  None
+;
+; Destr: r8, rdi, rcx, al
+; ----------------------------------------------------------------------------------------
+%macro put_zeroes 0
+; If rcx is less than free space in PRINT_BUFFER, we can put zeroes.
+; r8 = PRINT_BUFFER_SIZE - r10 — amount of free space in PRINT_BUFFER.
+    mov r8, PRINT_BUFFER_SIZE
+    sub r8, r10
+
+; If we can, put_zeroes.
+    cmp rcx, r8
+    jb .put_zeroes
+
+; Else we must flush PRINT_BUFFER before merging.
+    call buffer_flush
+
+.put_zeroes:
+; rdi = address of free space in PRINT_BUFFER.
+    lea rdi, [PRINT_BUFFER + r10]
+
+; PRINT_BUFFER expands, because of merging buffers.
+    add r10, rcx
+
+; We are moving forward.
+    cld
+; Putting zeroes.
+    mov al, '0'
+; Putting rcx zeroes in PRINT_BUFFER.
+    rep stosb
+
+%endmacro
+
+; ----------------------------------------------------------------------------------------
+; Prints [rax].[rdx], where [rax], [rdx] — numbers with base == 10.
+;
+; Entry: rax = integer
+;        rdx = fraction
+;
+; Exit:  None
+;
+; Destr: rax, rbx, rcx, rdx, rdi, rsi, r8
+; ----------------------------------------------------------------------------------------
+print_integer_and_fraction:
+; Print integer.
+; r8 = base.
+    mov r8, 10
+; Save rcx, rdx.
+    push rcx
+    push rdx
+    call number_to_ascii
+    pop rdx
+    pop rcx
+
+; Print dot
+    put_symbol '.'
+
+    put_zeroes
+
+; Print fraction.
+; r8 = base.
+    mov r8, 10
+; rax = rdx — number to print.
+    mov rax, rdx
+    call number_to_ascii
+
+    ret
+
+; ----------------------------------------------------------------------------------------
+; Splits double to integer and fraction.
+; 10 in power of amount_of_digits_after_dot in fraction lays in precision.
+;
+; Entry: xmm0 = double_to_split
+;
+; Exit:  rax = round_towards_zero(xmm0)
+;        rdx = round_towards_zero((xmm0 - round_towards_zero(xmm0)) * precision)
+;        rcx = amount_of_trailing_zeroes
+;
+; Destr: xmm1, xmm2, xmm3
+; ----------------------------------------------------------------------------------------
+split_xmm0:
+; Convert double to integer and fraction (truncate toward zero)
+; Save xmm0 in xmm1.
+    movsd xmm1, xmm0
+; xmm0 = round_toward_zero(xmm0) (through rax)
+    cvttsd2si rax, xmm0
+    cvtsi2sd  xmm0, rax
+
+; xmm1 = xmm1 - xmm0 == old_xmm0 - round_toward_zero(xmm0) == fraction_of_xmm0
+    subsd xmm1, xmm0
+
+; We will multiply by 10 every step, to count amount of trailing zeroes.
+    movsd xmm2, [TEN]
+; We will compare xmm1 with 1.
+    movsd xmm3, [ONE]
+; rcx = amount of digits after dot
+    mov rcx, PRECISION
+; If fraction is 0.000000, we need to display 5 trailing zeroes, so
+    mov rdx, 1
+
+.count_trailing_zeroes:
+; xmm1 = xmm1 * 10
+    mulsd xmm1, xmm2
+
+; Compare xmm1 and 1
+    ucomisd xmm1, xmm3
+; If xmm1 is lower than 1 and PRECISION isn't reached, continue
+    jb .is_lower_than_one
+
+; Else xmm1 is bigger than 1.
+; It means, that we have PRECISION - rcx trailing zeroes.
+; Save rcx in rdx
+    mov rdx, rcx
+
+; We need xmm1 = xmm1 * 10^(rcx-1).
+; If rcx == 1 loop will cause overflow, so we need to parse this case separatly.
+    cmp rcx, 1
+    je .end_of_cycle
+
+    dec rcx
+.multiply_on_ten:
+    mulsd xmm1, xmm2
+    loop .multiply_on_ten
+    jmp .end_of_cycle
+
+.is_lower_than_one:
+    loop .count_trailing_zeroes
+
+.end_of_cycle:
+; rcx = amount of trailing zeroes
+    mov rcx, PRECISION
+    sub rcx, rdx
+
+; In xmm1 we have fractional part. We need to round it.
+; Mode 0: round to nearest (even ties).
+    roundsd xmm1, xmm1, 0
+
+; rdx = round_toward_zero(xmm1) = numbers_after_dot
+    cvttsd2si rdx, xmm1
 
     ret
