@@ -27,32 +27,32 @@ CONVERT_ARRAY     db  "0123456789abcdef"
 
 ; Jump table for handling specifiers.
 JUMP_TABLE:
-            dq handle_invalid ; a
             dq handle_binary  ; b
             dq handle_char    ; c
             dq handle_decimal ; d
             dq handle_invalid ; e
             dq handle_float   ; f
-            dq handle_invalid ; g
-            dq handle_invalid ; h
-            dq handle_invalid ; i
-            dq handle_invalid ; j
-            dq handle_invalid ; k
-            dq handle_invalid ; l
-            dq handle_invalid ; m
-            dq handle_invalid ; n
+            dq 'o'-'g' dup (handle_invalid)
             dq handle_octal   ; o
             dq handle_invalid ; p
-            dq handle_invalid ; q
-            dq handle_invalid ; r
+            dq handle_color   ; q
+            dq 's'-'r' dup (handle_invalid)
             dq handle_string  ; s
-            dq handle_invalid ; t
-            dq handle_invalid ; u
-            dq handle_invalid ; v
-            dq handle_invalid ; w
+            dq 'x'-'t' dup (handle_invalid)
             dq handle_hex     ; x
-            dq handle_invalid ; y
-            dq handle_invalid ; z
+
+COLORS:
+            db 0x1b, 0x5b, 0x33, 0x30, 0x6d ; black
+LEN_OF_COLOR_SEQ       equ $ - COLORS
+            db 0x1b, 0x5b, 0x33, 0x31, 0x6d ; red
+            db 0x1b, 0x5b, 0x33, 0x32, 0x6d ; green
+            db 0x1b, 0x5b, 0x33, 0x33, 0x6d ; yellow
+            db 0x1b, 0x5b, 0x33, 0x34, 0x6d ; blue
+            db 0x1b, 0x5b, 0x33, 0x35, 0x6d ; purple
+            db 0x1b, 0x5b, 0x33, 0x36, 0x6d ; light blue
+
+RESET_COLOR db 0x1b, 0x5b, 0x30, 0x6d       ; reset_color
+LEN_OF_RESET_COLOR_SEQ equ $ - RESET_COLOR
 
 section .text
 global my_printf
@@ -124,7 +124,8 @@ my_printf:
     movsd [rsp + 6 * 8], xmm6
     movsd [rsp + 7 * 8], xmm7
 
-    call stack_printf
+    jmp stack_printf
+    .exit_from_stack_printf:
 
 ; We must balance the stack.
 ; We pushed 13 registers — each 8 bytes.
@@ -146,21 +147,25 @@ my_printf:
 stack_printf:
 ; We will use rbp for addressing to additional args, we must save (rbp is a callee-saved).
     push rbp
-; In stack we have: rsp —> |rbp|—|return address|—|... 8 float args ...|-|1st arg|.
+; In stack we have: rsp —> |rbp|—|... 8 float args ...|-|1st arg|.
 ; So to appeal with additional arguments we must do rbp += 16.
-    lea rbp, [rsp + 16 + 8 * 8]
+    lea rbp, [rsp + 8 + 8 * 8]
 
 ; We will use r9 for addressing to float args.
-    lea r9, [rsp + 16]
+    lea r9, [rsp + 8]
 ; We will use r11 for addressing to first arguments, which caller pushed in the stack.
 ; We need this for float arguments to rightly behave in situations such as
 ; format = "[%f 9+ times][default specifiers]"
-    lea r11, [rsp + 16 + 13 * 8]
+    lea r11, [rsp + 8 + 13 * 8]
 
 ; We will use r12 for counting amount of printed floats.
 ; r12 is a callee-saved, so we need to save it.
     push r12
     xor r12, r12
+
+; We will use r13 for counting amount of printed chars.
+; r13 is a calle-saved so we need to save it.
+    push r13
 
 ; We destroy rbx, but System V ADM64 ABI assume that rbx is a callee-save, so
     push rbx
@@ -214,14 +219,17 @@ stack_printf:
 ; Flush the buffer.
     call buffer_flush
 
-    add rax, r12
+; rax = amount_of_formatted_default_args + ammount_of_formatted_double_args
+    mov rax, r13
 
-; Restore r10, rbp.
+; Restore saved registers.
     pop r10
+    pop r13
     pop rbx
     pop r12
     pop rbp
-    ret
+
+    jmp my_printf.exit_from_stack_printf
 
 ; ------------- ---------------------------------------------------------------------------
 ; Parse specifier after '%' symbol in the string to print via function 'my_printf'
@@ -237,9 +245,9 @@ stack_printf:
 parse_specifier:
 ; We will use jump table. It consists of english alphabet letters, so
 ; rdi must be between 'a' and 'z' ASCII codes. Else this is invalid specifier
-    cmp byte [rdi], 'a'
+    cmp byte [rdi], 'b'
     jb handle_invalid
-    cmp byte [rdi], 'z'
+    cmp byte [rdi], 'x'
     ja handle_invalid
 
 ; cl = ASCII code of char == index in jump table
@@ -247,9 +255,12 @@ parse_specifier:
     mov cl, [rdi]
 
 ; Table consists of alphabet letters, so we need to sub 'a' code from ASCII code of char.
-    mov rcx, [JUMP_TABLE - 'a' * 8 + rcx * 8]
-; rcx = address of label to jump, according to rdx
-    jmp rcx
+    jmp [JUMP_TABLE - 'b' * 8 + rcx * 8]
+
+handle_invalid:
+; -1 is an error return code.
+    mov eax, -1
+    ret
 
 ; This is a routine ending of specifier handling functions.
 ; These functions don't do ret, because they aren't meant to be called.
@@ -261,40 +272,62 @@ routine_after_handling_specifier:
 ; Make rbp pointing on the next argument in the stack.
     add rbp, 8
 
-; If we wasted rsi, rdx, rcx, r8, r9 we should synchronize
+; —————————————— SYNCHRONIZATION OF POINTERS ON FLOAT AND DEFAULT ARGS ———————————————————
+; ———————————————————— AFTER HANDLING DEFAULT (not %f) ARGUMENT ——————————————————————————
+
+; If we have parsed all xmm registers (r12 >= 8), we are taking doubles from stack.
+    cmp r12, 8
+    jae .taking_doubles_from_stack
+; Else we shouldn't synchronize anything.
+    jmp .exit_from_routine_after_handling_specifier
+
+.taking_doubles_from_stack:
+; If we have parsed rsi, rdx, rcx, r8, r9 (eax >= 5), we are taking "not %f args" from stack.
+; If eax == 5, we parsed r9 just now, so we need to assign default args pointer to double ptr.
     cmp eax, 5
     je  .now_we_take_default_arguments_from_stack
-    ja  .synchornize_float_pointer
+; If eax > 5, we already assigned default args pointer to double ptr,
+; so we need just incrementing double ptr
+    ja  .synchornize_double_pointer
+; Else we mustn't synchronize anything
     jmp .exit_from_routine_after_handling_specifier
 
 .now_we_take_default_arguments_from_stack:
     lea rbp, [r11 + r12 * 8 - 8 * 8]
     jmp .exit_from_routine_after_handling_specifier
-.synchornize_float_pointer:
+
+.synchornize_double_pointer:
     inc r12
+
 .exit_from_routine_after_handling_specifier:
     ret
 
-routine_after_handling_f_specifier:
-; ; In eax we have amount of format elements. We parsed another one so eax++.
-;     inc eax
+; ————————————————————————————————————————————————————————————————————————————————————————
 
+routine_after_handling_f_specifier:
 ; We parsed another double.
     inc r12
 
-    cmp eax, 5
-    jae .synchornize_default_pointer
+; —————————————— SYNCHRONIZATION OF POINTERS ON FLOAT AND DEFAULT ARGS ———————————————————
+; ——————————————————————————— AFTER HANDLING %f ARGUMENT —————————————————————————————————
+
+; If we have parsed all xmm registers (r12 >= 8), we are taking doubles from stack.
+    cmp r12, 8
+    jae .taking_doubles_from_stack_f
     jmp .exit_from_routine_after_handling_f_specifier
 
-.synchornize_default_pointer:
+.taking_doubles_from_stack_f:
+; If we have parsed rsi, rdx, rcx, r8, r9 (eax >= 5), we are taking "not %f args" from stack, so
+; We need to increment default args pointer too.
+    cmp eax, 5
+    jae  .now_we_take_default_arguments_from_stack_f
+; Else we mustn't synchronize anything.
+    jmp .exit_from_routine_after_handling_f_specifier
+
+.now_we_take_default_arguments_from_stack_f:
     add rbp, 8
 
 .exit_from_routine_after_handling_f_specifier:
-    ret
-
-handle_invalid:
-; -1 is an error return code.
-    mov eax, -1
     ret
 
 ; ----------------------------------------------------------------------------------------
@@ -335,21 +368,23 @@ handle_invalid:
 
 %endmacro
 
+
 ; ----------------------------------------------------------------------------------------
-; Flushes first r10 bytes of PRINT_BUFFER
+; Writes in console
 ;
-; Entry: r10 = amount of bytes to flush
+; Entry: %1 = address of buffer
+;        %2 = length of buffer
 ;
 ; Exit:  None
 ;
 ; Destr: None
 ; ----------------------------------------------------------------------------------------
-buffer_flush:
+%macro write_in_console 2
 ; If buffer is empty, don't flush it.
-    test r10, r10
-    jz .exit
+    test %2, %2
+    jz .buffer_is_empty
 
-; We don't use buffer_flush frequently.
+; We don't use write_in_console frequently.
 ; So it's better to not scratch registers, than
 ; save them every time when print_char is called.
 ; We save r11 and rcx, because syscall may destroy it.
@@ -363,11 +398,11 @@ buffer_flush:
 ; rax = syscall code of "write"
     mov rax, 0x01
 ; rsi = address of buffer
-    mov rsi, PRINT_BUFFER
+    mov rsi, %1
 ; rdi = stdout file descriptor
     mov rdi, 1
 ; rdx = amount of chars to print
-    mov rdx, r10
+    mov rdx, %2
 
     syscall
 
@@ -380,6 +415,24 @@ buffer_flush:
     pop rax
     pop rcx
     pop r11
+
+.buffer_is_empty:
+
+%endmacro
+
+; ----------------------------------------------------------------------------------------
+; Flushes first r10 bytes of PRINT_BUFFER
+;
+; Entry: r10 = amount of bytes to flush
+;
+; Exit:  None
+;
+; Destr: None
+; ----------------------------------------------------------------------------------------
+buffer_flush:
+; Update r13 (amount of printed chars).
+    add r13, r10
+    write_in_console PRINT_BUFFER, r10
 
 .exit:
     ret
@@ -428,7 +481,7 @@ handle_string:
 
 ; If current char is terminating end the loop.
     cmp bl, 0
-    je .put_string_in_buffer
+    je .display_string
 
 ; Else strlen++
     inc rcx
@@ -436,6 +489,19 @@ handle_string:
     inc rbp
     jmp .calculate_strlen
 
+.display_string:
+
+; If length of string is bigger than buffer size we should syscall for it separately.
+    cmp rcx, PRINT_BUFFER_SIZE
+    jae .write_string
+    jmp .put_string_in_buffer
+
+.write_string:
+; Previously we must flush the buffer.
+    call buffer_flush
+; [rbp] = string_to_print[0]
+    sub rbp, rcx
+    write_in_console rbp, rcx
 
 .put_string_in_buffer:
 ; rsi = address of start of the string.
@@ -677,6 +743,45 @@ power_of_two_to_ascii:
 
     ret
 
+; ----------------------------------------------------------------------------------------
+; Handle %q specifier.
+; NOT FOR CALL. NO RET HERE. ONLY JUMP.
+;
+; Entry: rbp = &number_of_color_to_set
+;
+; Exit:  None
+;
+; Destr: rcx
+; ----------------------------------------------------------------------------------------
+handle_color:
+; Save rdi, because stack_printf uses it.
+    push rdi
+; rcx — number of color to print.
+    mov eax, [rbp]
+
+    cmp eax, -1
+    je  .reset_color
+    jmp .set_color
+
+.reset_color:
+; rsi — address of color escape sequence of reset color.
+    lea rsi, [RESET_COLOR]
+; rcx — length of color escape sequence of reset color.
+    mov rcx, LEN_OF_RESET_COLOR_SEQ
+    jmp .print_escape_seq
+
+.set_color:
+; rsi — address of color escape sequence of color.
+    lea rsi, [COLORS + eax * LEN_OF_COLOR_SEQ]
+; rcx — length of color escape sequence of color.
+    mov rcx, LEN_OF_COLOR_SEQ
+
+.print_escape_seq:
+; Print escape sequence.
+    put_buffer
+
+    pop rdi
+    jmp routine_after_handling_specifier
 
 ; ----------------------------------------------------------------------------------------
 ; Handle %f specifier
