@@ -6,8 +6,8 @@ ASM_FLAGS         = -f elf64
 COMPILER          = gcc
 COMPILER_FLAGS    = -c
 
-LINKER            = gcc
-LD_FLAGS          = -no-pie -z noexecstack
+LINKER            = g++
+LD_FLAGS 		  = -no-pie -pthread -Wl,-z,noexecstack -lgtest -lgmock
 
 # ---------------------------------------------------------------------------------------- #
 
@@ -45,7 +45,7 @@ $(LISTING_DIR):
 	@mkdir -p $(LISTING_DIR)
 
 $(EXECUTABLE_PATH): $(OBJECT_FILES) | $(BUILD_DIR)
-	@$(LINKER) $(LD_FLAGS) $(OBJECT_FILES) -o $@
+	@$(LINKER) $(OBJECT_FILES) $(LD_FLAGS) -o $@
 
 $(OBJECTS_DIR)/%.o: $(SOURCES_DIR)/%.cpp | $(OBJECTS_DIR)
 	@$(COMPILER) $(COMPILER_FLAGS) $< -o $@

@@ -166,6 +166,7 @@ stack_printf:
 ; We will use r13 for counting amount of printed chars.
 ; r13 is a calle-saved so we need to save it.
     push r13
+    xor r13, r13
 
 ; We destroy rbx, but System V ADM64 ABI assume that rbx is a callee-save, so
     push rbx
@@ -499,9 +500,12 @@ handle_string:
 .write_string:
 ; Previously we must flush the buffer.
     call buffer_flush
+; Update amount of printed chars.
+    add r13, rcx
 ; [rbp] = string_to_print[0]
     sub rbp, rcx
     write_in_console rbp, rcx
+    jmp .exit
 
 .put_string_in_buffer:
 ; rsi = address of start of the string.
@@ -510,6 +514,7 @@ handle_string:
 
     put_buffer
 
+.exit:
 ; Restore saved registers
     pop rdi
     pop rbx
